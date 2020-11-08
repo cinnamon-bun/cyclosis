@@ -30,7 +30,7 @@ firstName.set('Suzanne');
 console.log(await fullName.getWhenReady());
 ```
 
-Function cells can also be directly changed to a new function.  They are allowed to change their dependencies too.
+Function cells can also be directly changed to a new function.  They are allowed to change which cells they depend on.
 
 ```ts
 // fullName will no longer depend on firstName
@@ -39,18 +39,20 @@ fullName.set(async (get) => {
 });
 ```
 
-Function cells can also be long-running operations like network requests.  If their dependencies change while they're still running, they will be halted and restarted for you.
+Function cells can also be long-running operations like network requests.  If their dependencies update while they're still running, they will be halted and restarted for you.
 
 ```ts
-let matchingProducts = new Cell(async (get) => {
+let searchResults = new Cell(async (get) => {
     let search = await get(searchTermCell);
     return await fetch(`/api/search/${search}`);
 });
 ```
 
+So if you quickly change the `searchTermCell` several times, only the last search terms will be reflected in the eventual Ready state of `searchResults`.
+
 ## Consistency
 
-If several input cells are set simultaneously, cells that depend on them will only ever see a consistent combination of their values, even if slow async cells are present in the network:
+If several input cells are set simultaneously, cells that depend on them will only ever see a consistent combination of their values, even if slow async cells are present in the network of cells:
 
 ```ts
 // make a network that slowly trickles the firstName
@@ -164,7 +166,7 @@ firstName.set('a');  // this will not be used
 firstName.set('b');  // only this one will be used
 ```
 
-## Fun fact
+# Fun fact
 
 Cyclosis is named for the way cytoplasm flows between fungus cells.
 
