@@ -49,6 +49,7 @@ export type Thunk = () => void;
 export type OnChangeCb<T> = (val: T) => void;
 export type OnErrorCb = (err: Error) => void;
 export type OnStaleCb = () => void;
+export type OnDestroyCb = () => void;
 export type InnerGet<U> = (cell: Cell<U>) => Promise<U>;
 export type CellFn<T> = (get: InnerGet<any>) => Promise<T>;
 export type ResolveAndReject<T> = {
@@ -68,6 +69,7 @@ export class Cell<T> {
     _onChangeCbs: Set<OnChangeCb<T>> = new Set<OnChangeCb<T>>();
     _onErrorCbs: Set<OnErrorCb> = new Set<OnErrorCb>();
     _onStaleCbs: Set<OnStaleCb> = new Set<OnStaleCb>();
+    _onDestroyCbs: Set<OnDestroyCb> = new Set<OnDestroyCb>();
 
     _children: Set<Cell<any>> = new Set<Cell<any>>();
     _parents: Set<Cell<any>> = new Set<Cell<any>>();
@@ -109,6 +111,18 @@ export class Cell<T> {
         this._onStaleCbs.add(cb);
         return () => this._onStaleCbs.delete(cb);
     }
+    onDestroy(cb: OnDestroyCb): Thunk {
+        logC0(this, 'onDestroy(cb)');
+        if (this._destroyed) {
+            // if it's already destroyed, run the callback once and forget it
+            process.nextTick(cb);
+            return () => {};
+        } else {
+            this._onDestroyCbs.add(cb);
+            return () => this._onDestroyCbs.delete(cb);
+        }
+    }
+
     isReady(): boolean {
         // TODO: what should this do when the cell is destroyed?
         this._assertNotDestroyed();
@@ -157,24 +171,30 @@ export class Cell<T> {
     destroy(): void {
         if (this._destroyed) { return; }
 
+        // zero out our state to help with garbage collection
         this._value = undefined;
         this._err = null;
         this._destroyed = true;
 
+        // remove ourself from our parents
         for (let p of this._parents) {
             p._children.delete(this);
         }
         this._parents.clear();
         this._children.clear();
 
-        this._onChangeCbs.clear();
-        this._onErrorCbs.clear();
-        this._onStaleCbs.clear();
-
+        // anyone waiting on getWhenReady will get an error
         for (let {resolve, reject} of this._waiting) {
             reject(new CellWasDestroyed(this.id));
         }
         this._waiting = [];
+
+        // call onDestroy callbacks, and remove all callbacks
+        for (let cb of this._onDestroyCbs) { cb(); }
+        this._onDestroyCbs.clear();
+        this._onChangeCbs.clear();
+        this._onErrorCbs.clear();
+        this._onStaleCbs.clear();
     }
 
     //------------------------------------------------------------
@@ -182,16 +202,13 @@ export class Cell<T> {
 
     _addChild(cell: Cell<any>) {
         logC1(this, `_addChild: ${cell.id}`);
+        this._assertNotDestroyed();
         this._children.add(cell);
     }
     _removeChild(cell: Cell<any>) {
         logC1(this, `_removeChild: ${cell.id}`);
+        this._assertNotDestroyed();
         this._children.delete(cell);
-    }
-
-    _waveHitsMyParent(waveId: number) {
-        logC1(this, `_waveHitsMyParent(${waveId})`);
-        this._waveHitsMe(waveId);
     }
 
     //------------------------------------------------------------
@@ -210,7 +227,7 @@ export class Cell<T> {
             // propagate wave instantly to children
             logC2(this, `..._waveHitsMe(${waveId}): propagate wave to children`);
             for (let child of this._children) {
-                child._waveHitsMyParent(waveId);
+                child._waveHitsMe(waveId);
             }
             // run onStale callbacks
             if (wasReady) {
