@@ -1,0 +1,33 @@
+{
+  "name": "cyclosis",
+  "author": "Cinnamon",
+  "version": "0.0.1",
+  "description": "Reactive cells with propagating values, like a spreadsheet",
+  "homepage": "https://bitbucket.org/cinnamon-bun/cyclosis#readme",
+  "license": "ISC",
+  "main": "./build/index.js",
+  "scripts": {
+    "clean": "rm -rf build coverage .nyc_output",
+    "build": "tsc",
+    "test": "tap -Rspecy --jobs=1 build/test/*.test.js",
+    "test-coverage": "npm test -- --coverage-report=lcov",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@bitbucket.org/cinnamon-bun/cyclosis.git"
+  },
+  "devDependencies": {
+    "@types/node": "^14.0.5",
+    "typescript": "^3.9.7"
+  },
+  "dependencies": {
+    "@types/jsdom": "^16.2.5",
+    "@types/tap": "^14.10.1",
+    "@types/tape": "^4.13.0",
+    "chalk": "^4.1.0",
+    "tap": "^14.10.8",
+    "tape": "^5.0.1",
+    "tslib": "^2.0.3"
+  }
+}
