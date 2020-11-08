@@ -1,5 +1,5 @@
 import t = require('tap');
-//t.runOnly = true;
+t.runOnly = true;
 
 import {
     Cell,
@@ -51,9 +51,48 @@ t.test('id generation', async (t: any) => {
     t.done();
 });
 
+t.only('const cell immediate onchange', async (t: any) => {
+    let log = new Logger();
+    log.marker('init');
+
+    let a = new Cell<string>('a', 'cellA');
+    a.onChange(val => {
+        t.true(a.isReady(), 'const cell is ready inside onChange');
+        let msg = `1.${a.id}->${JSON.stringify(val)}`;
+        logOnChange(msg);
+        log.log(msg);
+    });
+
+    log.marker('end-main');
+    // onchange is called just after init, even for const cells
+    // because cells always start off stale, then become ready on nextTick
+    log.expect('1.cellA->"a"');
+    await log.sleep(50); //--------------------------------------------------
+
+    // add another onChange later.
+    // this one should not be called right now
+    a.onChange(val => {
+        t.true(a.isReady(), 'const cell is ready inside onChange');
+        let msg = `2.${a.id}->${JSON.stringify(val)}`;
+        logOnChange(msg);
+        log.log(msg);
+    });
+
+    await log.sleep(51); //--------------------------------------------------
+
+    // change, and both are called
+    a.set('aa');
+    log.expect('1.cellA->"aa"');
+    log.expect('2.cellA->"aa"');
+
+    await log.sleep(52); //--------------------------------------------------
+
+    t.strictSame(log.logs, log.expected, 'logs match');
+    t.done();
+});
+
 t.test('one const cell', async (t: any) => {
     let log = new Logger();
-
     log.marker('init');
 
     let a = new Cell<string>('a', 'cellA');
@@ -490,3 +529,5 @@ t.test('const -> slow fn -> fast fn', async (t: any) => {
     t.strictSame(log.logs, log.expected, 'logs match');
     t.done();
 });
+
+// TODO: test changing a cell between const and fn modes
