@@ -203,7 +203,7 @@ t.test('one fn cell getWhenReady just after instantiation', async (t: any) => {
     t.done();
 });
 
-t.only('const --> fn', async (t: any) => {
+t.test('const --> fn', async (t: any) => {
     let log = new Logger();
 
     log.marker('init');
@@ -562,4 +562,103 @@ t.test('const -> slow fn -> fast fn', async (t: any) => {
 
 // TODO: test destroy() especially in the middle of a network, what should happen?
 
-// TODO: error handling: re-throw exception into waiting promises
+// TODO: add a method for setting a const cell to an error
+
+t.test('error handling, const -> slow fn -> fast fn', async (t: any) => {
+    let log = new Logger();
+    log.marker('init');
+
+    // a-->b-->c plus direct link from a-->c
+    // b is slow
+
+    let a = new Cell<string>('a', 'cellA');
+    let b = new Cell<string>(async (get) => {
+        await sleep(50);
+        let av = await get(a);
+        if (av === 'a-err') { throw new Error('regular error from b'); }
+        await sleep(50);
+        return `(b=${av})`;
+    }, 'cellB');
+    let c = new Cell<string>(async (get) => `[c=${await get(a)}+${await get(b)}]`, 'cellC');
+
+    a.onStale(() => log.log('a-on-stale'));
+    a.onChange(v => log.log('a-on-change'));
+
+    b.onStale(() => log.log('b-on-stale'));
+    b.onChange(v => log.log('b-on-change'));
+    b.onError(() => log.log('b-on-error'));
+
+    c.onStale(() => log.log('c-on-stale'));
+    c.onChange(v => log.log('c-on-change'));
+    c.onError(() => log.log('c-on-error'));
+
+    log.marker('end-main');
+
+    t.same(await a.getWhenReady(), 'a', 'a when ready');
+    t.same(await b.getWhenReady(), '(b=a)', 'b when ready');
+    t.same(await c.getWhenReady(), '[c=a+(b=a)]', 'c when ready');
+    log.expect('a-on-change');
+    log.expect('b-on-change');
+    log.expect('c-on-change');
+
+    await sleep(30);    //----------------------------------------
+
+    t.ok(true, 'a.set("a-err")');
+    log.marker('a.set(a-err)');
+    a.set('a-err'); // this will trigger b to throw an error, which will also propagate to c
+
+    log.expect('a-on-stale');
+    log.expect('c-on-stale');  // not sure why out of order, I guess children are a Set...
+    log.expect('b-on-stale');
+
+    log.expect('a-on-change');
+
+    log.expect('b-on-error');
+    log.expect('c-on-error');
+
+    // b should error
+    try {
+        let x = await b.getWhenReady();
+        t.ok(false, 'b did not throw as expected');
+    } catch (err) {
+        t.ok(true, 'b threw as expected');
+    }
+    t.throws(() => b.getNow(), 'b.getNow throws');
+    // c should error too
+    try {
+        let x = await c.getWhenReady();
+        t.ok(false, 'c did not throw as expected');
+    } catch (err) {
+        t.ok(true, 'c threw as expected');
+    }
+    // do b again once it's already ready
+    try {
+        let x = await b.getWhenReady();
+        t.ok(false, 'b did not throw as expected');
+    } catch (err) {
+        t.ok(true, 'b threw as expected');
+    }
+    t.throws(() => b.getNow(), 'b.getNow throws');
+
+    await sleep(33);    //----------------------------------------
+
+    // back to non-error state
+    t.ok(true, 'a.set("aa")');
+    log.marker('a.set(aa)');
+    a.set('aa');
+
+    log.expect('a-on-stale');
+    log.expect('c-on-stale');
+    log.expect('b-on-stale');
+
+    log.expect('a-on-change');
+    log.expect('b-on-change');
+    log.expect('c-on-change');
+
+    t.same(await a.getWhenReady(), 'aa', 'a when ready');
+    t.same(await b.getWhenReady(), '(b=aa)', 'b when ready');
+    t.same(await c.getWhenReady(), '[c=aa+(b=aa)]', 'c when ready');
+
+    t.strictSame(log.logs, log.expected, 'logs match');
+    t.done();
+});

@@ -224,14 +224,15 @@ export class Cell<T> {
             // we are ready or running a different wave
             let wasReady = this._currentWaveId === null;
             this._currentWaveId = waveId;  // changing this will tell the existing update thread, if there is one, to stop
+            // run onStale callbacks
+            if (wasReady) {
+                logC2(this, `..._waveHitsMe(${waveId}): I've become stale; calling onStaleCbs`);
+                for (let cb of this._onStaleCbs) { cb(); }
+            }
             // propagate wave instantly to children
             logC2(this, `..._waveHitsMe(${waveId}): propagate wave to children`);
             for (let child of this._children) {
                 child._waveHitsMe(waveId);
-            }
-            // run onStale callbacks
-            if (wasReady) {
-                for (let cb of this._onStaleCbs) { cb(); }
             }
             // queue up an update thread for this wave
             logC2(this, `..._waveHitsMe(${waveId}): queue up _updateThread on nextTick`);
