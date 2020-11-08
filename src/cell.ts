@@ -40,6 +40,7 @@ class BecameStaleError extends Error {
 
 export type Thunk = () => void;
 export type OnChangeCb<T> = (val: T) => void;
+export type OnStaleCb<T> = () => void;
 export type InnerGet<U> = (cell: Cell<U>) => Promise<U>;
 export type CellFn<T> = (get: InnerGet<any>) => Promise<T>;
 
@@ -50,6 +51,7 @@ export class Cell<T> {
     _value: T | undefined = undefined;
     _fn: CellFn<T> | null = null;
     _onChangeCbs: Set<OnChangeCb<T>> = new Set<OnChangeCb<T>>();
+    _onStaleCbs: Set<OnStaleCb<T>> = new Set<OnStaleCb<T>>();
     _children: Set<Cell<any>> = new Set<Cell<any>>();
     _parents: Set<Cell<any>> = new Set<Cell<any>>();
     _resolves: ((v: T) => void)[] = [];
@@ -67,6 +69,11 @@ export class Cell<T> {
         logC0(this, 'onChange(cb)');
         this._onChangeCbs.add(cb);
         return () => this._onChangeCbs.delete(cb);
+    }
+    onStale(cb: OnStaleCb<T>): Thunk {
+        logC0(this, 'onStale(cb)');
+        this._onStaleCbs.add(cb);
+        return () => this._onStaleCbs.delete(cb);
     }
     isReady(): boolean {
         return this._currentWaveId === null;
@@ -122,11 +129,16 @@ export class Cell<T> {
     private _waveHitsMe(waveId: number) {
         logC2(this, `_waveHitsMe(${waveId})`);
         if (waveId !== this._currentWaveId) {
+            let wasReady = this._currentWaveId === null;
             this._currentWaveId = waveId;  // changing this will tell the existing update thread, if there is one, to stop
             // propagate wave instantly to children
             logC2(this, `..._waveHitsMe(${waveId}): propagate wave to children`);
             for (let child of this._children) {
                 child._waveHitsMyParent(waveId);
+            }
+            // run onStale callbacks
+            if (wasReady) {
+                for (let cb of this._onStaleCbs) { cb(); }
             }
             // queue up an update thread for this wave
             logC2(this, `..._waveHitsMe(${waveId}): queue up _updateThread on nextTick`);

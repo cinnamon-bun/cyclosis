@@ -1,5 +1,5 @@
 import t = require('tap');
-t.runOnly = true;
+//t.runOnly = true;
 
 import {
     Cell,
@@ -51,7 +51,7 @@ t.test('id generation', async (t: any) => {
     t.done();
 });
 
-t.only('const cell immediate onchange', async (t: any) => {
+t.test('const cell immediate onchange', async (t: any) => {
     let log = new Logger();
     log.marker('init');
 
@@ -62,11 +62,18 @@ t.only('const cell immediate onchange', async (t: any) => {
         logOnChange(msg);
         log.log(msg);
     });
+    a.onStale(() => {
+        t.false(a.isReady(), 'const cell is not ready inside onStale');
+        let msg = `1.${a.id}->stale`;
+        logOnChange(msg);
+        log.log(msg);
+    });
 
     log.marker('end-main');
     // onchange is called just after init, even for const cells
     // because cells always start off stale, then become ready on nextTick
     log.expect('1.cellA->"a"');
+    // onStale is not called right now because it starts off stale, it doesn't "become" stale
     await log.sleep(50); //--------------------------------------------------
 
     // add another onChange later.
@@ -82,6 +89,7 @@ t.only('const cell immediate onchange', async (t: any) => {
 
     // change, and both are called
     a.set('aa');
+    log.expect('1.cellA->stale');
     log.expect('1.cellA->"aa"');
     log.expect('2.cellA->"aa"');
 
@@ -156,6 +164,13 @@ t.test('one fn cell', async (t: any) => {
         logOnChange(msg);
         log.log(msg);
     });
+    // this doesn't ever run in this test since the fn cell never goes from fresh to stale
+    a.onStale(() => {
+        t.false(a.isReady(), 'fn cell is not ready inside onStale');
+        let msg = `${a.id}->stale`;
+        logOnChange(msg);
+        log.log(msg);
+    });
 
     log.marker('end-main');
     process.nextTick(() => {
@@ -188,7 +203,7 @@ t.test('one fn cell getWhenReady just after instantiation', async (t: any) => {
     t.done();
 });
 
-t.test('const --> fn', async (t: any) => {
+t.only('const --> fn', async (t: any) => {
     let log = new Logger();
 
     log.marker('init');
@@ -211,6 +226,12 @@ t.test('const --> fn', async (t: any) => {
         logOnChange(msg);
         log.log(msg);
     });
+    b.onStale(() => {
+        t.false(b.isReady(), 'fn cell is not ready inside onStale');
+        let msg = `${b.id}->stale`;
+        logOnChange(msg);
+        log.log(msg);
+    });
 
     log.marker('end-main');
     log.expect('cellA->"a"');
@@ -230,10 +251,14 @@ t.test('const --> fn', async (t: any) => {
 
     t.true(a.isReady(), 'a ready before setting a');
     t.true(b.isReady(), 'b ready before setting a');
+    log.marker('set-a=aa');
     a.set('aa');
+    log.expect('cellB->stale');
     t.false(a.isReady(), 'a not ready after setting a');
     t.false(b.isReady(), 'b not ready after setting a (staleness propagates instantly)');
+    log.marker('set-a=aaa');
     a.set('aaa');
+    // should not call b.onStale again, it's already stale
     t.same(a.getNow(), 'aaa', 'a after set');
     t.same(b.getNow(), 'a+b', 'b after set keeps old value while stale');
 
@@ -530,4 +555,6 @@ t.test('const -> slow fn -> fast fn', async (t: any) => {
     t.done();
 });
 
-// TODO: test changing a cell between const and fn modes
+// TODO: test changing a single cell back and forth between const and fn modes
+
+// TODO: cache prev value and avoid useless updates if nothing changes

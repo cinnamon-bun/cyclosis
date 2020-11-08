@@ -100,6 +100,40 @@ lastName.set('Cherry');
 // because the first and last names were always set in the same tick.
 ```
 
+# Timing of callbacks
+
+For a plain value cell:
+
+```
+new Cell("hello")
+    --- nextTick ---
+    cell becomes ready
+    onChange callbacks fire
+```
+
+For a function cell:
+
+```
+new Cell(async (get) => /* function here */);
+    --- nextTick ---
+    function begins running
+    --- nextTick ---
+    cell becomes ready
+    onChange callbacks fire after nextTick
+```
+
+For any kind of cell:
+
+```
+foo.set(val)
+    foo and its children fire onStale callbacks synchronously with set()
+    --- nextTick ---
+    function begins running, if this is a function cell
+    --- eventually ---
+    foo becomes ready
+    foo onChange callbacks fire
+```
+
 # API
 
 ## Constructing cells
@@ -136,6 +170,8 @@ cell.isReady() --> boolean
 
 Check if a cell is Ready.
 
+## Events
+
 ```ts
 let unsubscribe = cell.onChange((newVal) => {
     // do something here
@@ -143,11 +179,18 @@ let unsubscribe = cell.onChange((newVal) => {
 unsubscribe();
 ```
 
-Subscribe to changes in a cell.
+Subscribe to changes in a cell.  The callback will run whenever the cell changes from Stale to Ready.
 
-Note that this will be called on the cell's initial value if you subscribe during the same tick that the cell was created.  That's because cells always begin their life Stale and then become Ready in the next tick, triggering their subscribers.
+Note that newly created cells start off Stale and become Ready on nextTick.  So if you create a cell and immediately subscribe to it, the callback will fire on nextTick.  If you subscribe to a cell later after it already exists, the callback won't fire until the cell changes.
 
-If you subscribe later in a cell's life, the callback will only run when the value actually changes.
+```ts
+let unsubscribe = cell.onStale(() => {
+    // do something here
+});
+unsubscribe();
+```
+
+Run a callback when a cell becomes stale.
 
 ## Setting values
 
