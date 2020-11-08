@@ -14,6 +14,7 @@ import {
     logTestLog,
     logTestExpect,
     sleep,
+    CellWasDestroyed,
 } from '../cell';
 
 class Logger {
@@ -555,15 +556,6 @@ t.test('const -> slow fn -> fast fn', async (t: any) => {
     t.done();
 });
 
-// TODO: test changing a single cell back and forth between const and fn modes
-
-// TODO: cache prev value and avoid useless updates if nothing changes.
-// this is actually quite hard, instead make a wrapper that memoizes a cell.
-
-// TODO: test destroy() especially in the middle of a network, what should happen?
-
-// TODO: add a method for setting a const cell to an error
-
 t.test('error handling, const -> slow fn -> fast fn', async (t: any) => {
     let log = new Logger();
     log.marker('init');
@@ -662,3 +654,64 @@ t.test('error handling, const -> slow fn -> fast fn', async (t: any) => {
     t.strictSame(log.logs, log.expected, 'logs match');
     t.done();
 });
+
+t.test('destroy, one const cell', async (t: any) => {
+    let log = new Logger();
+    log.marker('init');
+
+    // make and destroy right away
+    let a = new Cell<string>('a', 'cellA');
+    a.onDestroy(() => log.log('onDestroy-a'));
+
+    t.same(a.isDestroyed(), false, 'is not destroyed');
+    a.destroy();
+    t.same(a.isDestroyed(), true, 'is destroyed');
+
+    log.expect('onDestroy-a');
+
+    // make now and destroy later
+    let a2 = new Cell<string>('a2', 'cellA2');
+    a2.onDestroy(() => log.log('onDestroy-a2'));
+
+    await sleep(33);    //----------------------------------------
+
+    t.same(a2.isDestroyed(), false, 'is not destroyed');
+    a2.destroy();
+    t.same(a2.isDestroyed(), true, 'is destroyed');
+
+    log.expect('onDestroy-a2');
+
+    t.throws(() => a2.getNow(), new CellWasDestroyed('cellA2'), 'getNow throws when destroyed');
+    t.throws(() => a2.isReady(), new CellWasDestroyed('cellA2'), 'isReady throws when destroyed');
+    t.throws(() => a2.onChange(v=>{}), new CellWasDestroyed('cellA2'), 'onChange throws when destroyed');
+    t.throws(() => a2.onError(()=>{}), new CellWasDestroyed('cellA2'), 'onError throws when destroyed');
+    t.throws(() => a2.onStale(()=>{}), new CellWasDestroyed('cellA2'), 'onStale throws when destroyed');
+    t.throws(() => a2.set('zzz'), new CellWasDestroyed('cellA2'), 'set throws when destroyed');
+
+    try {
+        await a2.getWhenReady();
+        t.ok(false, 'getWhenReady did not throw as expected');
+    } catch (err) {
+        t.ok(true, 'getWhenReady threw as expected');
+    }
+
+    // onDestroy when already destroyed should run once on nextTick
+    a2.onDestroy(() => log.log('onDestroy-a2-again'));
+    log.expect('onDestroy-a2-again');
+
+    await sleep(33);    //----------------------------------------
+
+    t.strictSame(log.logs, log.expected, 'logs match');
+    t.done();
+});
+
+// TODO: test changing a single cell back and forth between const and fn modes
+
+// TODO: cache prev value and avoid useless updates if nothing changes.
+// this is actually quite hard, instead make a wrapper that memoizes a cell.
+
+// TODO: test destroy() especially in the middle of a network, what should happen?
+
+// TODO: test destroy() on slow async fn cell
+
+// TODO: add a method for setting a const cell to an error

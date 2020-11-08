@@ -156,6 +156,7 @@ export class Cell<T> {
     }
     async getWhenReady(): Promise<T> {
         // this can throw an error if the cell is in an error state
+        // TODO: should this wait until the error goes away instead?
         this._assertNotDestroyed();
         if (this._currentWaveId === null) {
             logC0(this, `getWhenReady() -- ready.  value = ${this._value}; err = ${this._err}`);

@@ -138,8 +138,6 @@ foo.set(val)
 
 ## Constructing cells
 
-New cells always start off Stale, and become Ready after nextTick.  This means if you call `getNow` on them just after constructing them, you'll get `undefined`.
-
 ```ts
 new Cell<string>("my initial value")
 ```
@@ -147,8 +145,16 @@ new Cell<string>("my initial value")
 Create a new cell that holds a string, with the given initial value.
 
 ```ts
-new Cell<string>("my initial value")
+new Cell<string>(async (get) => {
+    return await get(otherCell) + '!!!!';
+});
 ```
+
+Create a new function cell.
+
+New cells always start off Stale, and become Ready after nextTick.  This means if you call `getNow` on them just after constructing them, you'll get `undefined`.
+
+Cells can be given an `id`, a string, as the second argument in their constructor.  This is mostly useful for debugging.
 
 ## Reading cells
 
@@ -162,7 +168,7 @@ Once the cell is Ready, return its value.  If the cell is Ready right now, this 
 cell.getNow() --> value | undefined
 ```
 
-Read the cell synchronously.  If the cell is Stale this returns the previous value; if the cell was just instantiated this will return `undefined`.
+Read the cell synchronously.  If the cell is Stale this returns the previous value; if the cell was just instantiated this can return `undefined` since it isn't Ready yet.
 
 ```ts
 cell.isReady() --> boolean
@@ -187,10 +193,25 @@ Note that newly created cells start off Stale and become Ready on nextTick.  So 
 let unsubscribe = cell.onStale(() => {
     // do something here
 });
-unsubscribe();
 ```
 
 Run a callback when a cell becomes stale.
+
+```ts
+let unsubscribe = cell.onError(err => {
+    // do something here
+});
+```
+
+Run a callback when a cell's function throws an error.
+
+```ts
+let unsubscribe = cell.onDestroy(() => {
+    // do something here
+});
+```
+
+Run a callback when a cell is destroyed.
 
 ## Setting values
 
@@ -209,7 +230,54 @@ firstName.set('a');  // this will not be used
 firstName.set('b');  // only this one will be used
 ```
 
+## Destroying a cell
+
+```ts
+cell.destroy();
+```
+
+Destroy a cell.  This removes its connections to other cells, stops its function from running, removes references to its `_value` so it can be garbage collected, removes all callbacks, and calls the `onDestroy` callbacks.
+
+Once a cell has been destroyed it can't be used anymore.  Calling any function will throw a `CellWasDestroyed` error.  Cells that depend on it will get `CellWasDestroyed` errors when trying to read it, and so that will become their error state.
+
+The only thing you can safely do with a destroyed cell is call `destroy()` again (which does nothing) or call `isDestroyed()`.
+
+```ts
+cell.isDestroyed() --> boolean
+```
+
+Check if a cell is destroyed.
+
+# Errors
+
+If a cell's function throws an error, the cell enters an error state.  Trying to get the value of the cell will instead throw the error.
+
+Cells that depend on an error'd cell will also throw that error.
+
+```ts
+// a function cell that always throws an error
+let oopsCell = new Cell<string>(async (get) => {
+    throw new Error("oops");
+});
+
+oopsCell.getNow();  // throws "oops"
+await oopsCell.getWhenReady();  // throws "oops"
+
+// errors propagate to other cells.
+// make a cell that depends on the error'd cell...
+let shout = new Cell<string>(async (get) => {
+    // this will throw "oops" when it tries to get(oopsCell)...
+    return await get(oopsCell) + '!!!';
+});
+
+await shout.getWhenReady();  // throws "oops"
+
+// go back to a normal state
+oopsCell.set('hello');
+await shout.getWhenReady(); // returns "hello!!!"
+```
+
 # Fun fact
 
-Cyclosis is named for the way cytoplasm flows between fungus cells.
+Cyclosis is named for the way [the contents of fungus cells flow from cell to cell](https://en.wikipedia.org/wiki/Cytoplasmic_streaming).
 
