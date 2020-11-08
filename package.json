@@ -1,6 +1,6 @@
 {
   "name": "cyclosis",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Reactive cells with propagating values, like a spreadsheet",
   "author": "Cinnamon <cinnamon_npm@fastmail.com>",
   "homepage": "https://github.com/cinnamon-bun/cyclosis",
