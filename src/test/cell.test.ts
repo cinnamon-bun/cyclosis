@@ -557,4 +557,9 @@ t.test('const -> slow fn -> fast fn', async (t: any) => {
 
 // TODO: test changing a single cell back and forth between const and fn modes
 
-// TODO: cache prev value and avoid useless updates if nothing changes
+// TODO: cache prev value and avoid useless updates if nothing changes.
+// this is actually quite hard, instead make a wrapper that memoizes a cell.
+
+// TODO: test destroy() especially in the middle of a network, what should happen?
+
+// TODO: error handling: re-throw exception into waiting promises

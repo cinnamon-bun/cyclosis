@@ -31,32 +31,55 @@ let makeWaveId = () => {
 //================================================================================
 // TYPES
 
-class BecameStaleError extends Error {
+class _UpdateWasCancelled extends Error {
     constructor(message?: string) {
         super(message || '');
         this.name = 'BecameStaleError';
     }
 }
 
+export class CellWasDestroyed extends Error {
+    constructor(message?: string) {
+        super(message || '');
+        this.name = 'CellWasDestroyed';
+    }
+}
+
 export type Thunk = () => void;
 export type OnChangeCb<T> = (val: T) => void;
-export type OnStaleCb<T> = () => void;
+export type OnErrorCb = (err: Error) => void;
+export type OnStaleCb = () => void;
 export type InnerGet<U> = (cell: Cell<U>) => Promise<U>;
 export type CellFn<T> = (get: InnerGet<any>) => Promise<T>;
+export type ResolveAndReject<T> = {
+    resolve: (v: T) => void,
+    reject: (err: any) => void,
+}
 
 //================================================================================
 
 export class Cell<T> {
     id: string;
-    _value: T | undefined = undefined;
+
     _fn: CellFn<T> | null = null;
+    _value: T | undefined = undefined;
+    _err: Error | null = null;
+
     _onChangeCbs: Set<OnChangeCb<T>> = new Set<OnChangeCb<T>>();
-    _onStaleCbs: Set<OnStaleCb<T>> = new Set<OnStaleCb<T>>();
+    _onErrorCbs: Set<OnErrorCb> = new Set<OnErrorCb>();
+    _onStaleCbs: Set<OnStaleCb> = new Set<OnStaleCb>();
+
     _children: Set<Cell<any>> = new Set<Cell<any>>();
     _parents: Set<Cell<any>> = new Set<Cell<any>>();
-    _resolves: ((v: T) => void)[] = [];
+
+    _waiting: ResolveAndReject<T>[] = [];  // waiting promises from getWhenReady
+
     _currentWaveId: number | null = null;  // stale if not null
+
+    _destroyed: boolean = false;
+
     //------------------------------------------------------------
+
     constructor(valOrFn: T | CellFn<T>, id?: string) {
         this.id = id === undefined ? ('cell:'+Math.random()) : id;
         logC0(this, `constructor(${valOrFn instanceof Function ? 'fn' : JSON.stringify(valOrFn)}, ${JSON.stringify(id)})`);
@@ -65,20 +88,37 @@ export class Cell<T> {
     }
     //------------------------------------------------------------
     // PUBLIC API
+    _assertNotDestroyed(): void {
+        if (this._destroyed) { throw new CellWasDestroyed(this.id); }
+    }
     onChange(cb: OnChangeCb<T>): Thunk {
         logC0(this, 'onChange(cb)');
+        this._assertNotDestroyed();
         this._onChangeCbs.add(cb);
         return () => this._onChangeCbs.delete(cb);
     }
-    onStale(cb: OnStaleCb<T>): Thunk {
+    onError(cb: OnErrorCb): Thunk {
+        logC0(this, 'onError(cb)');
+        this._assertNotDestroyed();
+        this._onErrorCbs.add(cb);
+        return () => this._onErrorCbs.delete(cb);
+    }
+    onStale(cb: OnStaleCb): Thunk {
         logC0(this, 'onStale(cb)');
+        this._assertNotDestroyed();
         this._onStaleCbs.add(cb);
         return () => this._onStaleCbs.delete(cb);
     }
     isReady(): boolean {
+        // TODO: what should this do when the cell is destroyed?
+        this._assertNotDestroyed();
         return this._currentWaveId === null;
     }
+    isDestroyed(): boolean {
+        return this._destroyed;
+    }
     set(valOrFn: T | CellFn<T>) {
+        this._assertNotDestroyed();
         if (valOrFn instanceof Function) {
             logC0(this, `set(fn)`);
             this._value = undefined;
@@ -94,22 +134,52 @@ export class Cell<T> {
         logC0(this, `...set: done`);
     }
     getNow(): T | undefined {
+        // this can throw an error if the cell is in an error state
         logC0(this, 'getNow()');
+        this._assertNotDestroyed();
+        if (this._err !== null) { throw this._err; }
         return this._value;
     }
     async getWhenReady(): Promise<T> {
+        // this can throw an error if the cell is in an error state
+        this._assertNotDestroyed();
         if (this._currentWaveId === null) {
-            logC0(this, `getWhenReady() -- ready.  value = ${this._value}`);
+            logC0(this, `getWhenReady() -- ready.  value = ${this._value}; err = ${this._err}`);
+            if (this._err !== null) { throw this._err; }
             return this._value as T;
         } else {
             logC0(this, 'getWhenReady() -- queueing promise');
             return new Promise((resolve, reject) => {
-                this._resolves.push(resolve);
+                this._waiting.push({resolve, reject});
             });
         }
     }
+    destroy(): void {
+        if (this._destroyed) { return; }
+
+        this._value = undefined;
+        this._err = null;
+        this._destroyed = true;
+
+        for (let p of this._parents) {
+            p._children.delete(this);
+        }
+        this._parents.clear();
+        this._children.clear();
+
+        this._onChangeCbs.clear();
+        this._onErrorCbs.clear();
+        this._onStaleCbs.clear();
+
+        for (let {resolve, reject} of this._waiting) {
+            reject(new CellWasDestroyed(this.id));
+        }
+        this._waiting = [];
+    }
+
     //------------------------------------------------------------
     // INTERNAL API
+
     _addChild(cell: Cell<any>) {
         logC1(this, `_addChild: ${cell.id}`);
         this._children.add(cell);
@@ -126,9 +196,15 @@ export class Cell<T> {
 
     //------------------------------------------------------------
     // PRIVATE
+
     private _waveHitsMe(waveId: number) {
         logC2(this, `_waveHitsMe(${waveId})`);
+        if (this._destroyed) {
+            logC2(this, `..._waveHitsMe(${waveId}): cell was destroyed; returning`);
+            return;
+        }
         if (waveId !== this._currentWaveId) {
+            // we are ready or running a different wave
             let wasReady = this._currentWaveId === null;
             this._currentWaveId = waveId;  // changing this will tell the existing update thread, if there is one, to stop
             // propagate wave instantly to children
@@ -144,12 +220,16 @@ export class Cell<T> {
             logC2(this, `..._waveHitsMe(${waveId}): queue up _updateThread on nextTick`);
             process.nextTick(() => this._updateThread(waveId));
         } else {
+            // we are already running this wave
             logC2(this, `..._waveHitsMe(${waveId}) -- skipping because already processing this wave`);
         }
         logC2(this, `..._waveHitsMe(${waveId}): done`);
     }
     private async _updateThread(waveId: number) {
         logCUp(this, `_updateThread(${waveId}): starting`);
+        if (this._destroyed) {
+            logCUp(this, `..._updateThread(${waveId}): cell was destroyed; quitting`);
+        }
         if (waveId !== this._currentWaveId) {
             logCUp(this, `..._updateThread(${waveId}): obsolete wave; quitting`);
             return;
@@ -163,15 +243,29 @@ export class Cell<T> {
         if (this._fn === null) {
             // this is a const cell
             logCUp(this, `..._updateThread(${waveId}): this is a const cell; finishing wave right away`);
-            this._finishWave(waveId, this._value as T);
+            this._finishWave(waveId, this._value as T, null);
         } else {
-            // this is a fn cell
+            // this is a fn cell.
+
             let innerGet: InnerGet<any> = async (cell: Cell<any>): Promise<any> => {
-                if (waveId !== this._currentWaveId) { throw new BecameStaleError('a'); }
+                // the cell _fn will run this to get other cells.
+                // throws _UpdateWasCancelled if we want the _fn to stop running.
+
+                // if this cell itself was destroyed or this update became obsolete, kill the function
+                if (this._destroyed) { throw new _UpdateWasCancelled(`1. this cell ${this.id} was destroyed`); }
+                if (waveId !== this._currentWaveId) { throw new _UpdateWasCancelled(`1. this update wave is obsolete`); }
+
                 this._parents.add(cell);
                 cell._addChild(this);
+
+                // this can throw CellWasDestroyed or the cell's error if it has one, from the parent cell
+                // a CellWasDestroyed error will be treated as an error from the _fn like any other
                 let v = await cell.getWhenReady();
-                if (waveId !== this._currentWaveId) { throw new BecameStaleError('b'); }
+
+                // check one more time to see if this cell is destroyed or this update is obsolete
+                if (this._destroyed) { throw new _UpdateWasCancelled(`2. this cell ${this.id} was destroyed`); }
+                if (waveId !== this._currentWaveId) { throw new _UpdateWasCancelled(`2. this update wave is obsolete`); }
+
                 return v;
             };
             try {
@@ -179,39 +273,55 @@ export class Cell<T> {
                 let val = await this._fn(innerGet);
                 logCUp(this, `..._updateThread(${waveId}): ..._fn returned ${JSON.stringify(val)}`);
                 logCUp(this, `..._updateThread(${waveId}): finishing wave`);
-                this._finishWave(waveId, val);
+                this._finishWave(waveId, val, null);
                 logCUp(this, `..._updateThread(${waveId}): done`);
-            } catch (e) {
-                if (e instanceof BecameStaleError) {
-                    logCUp(this, `..._updateThread(${waveId}): ..._fn threw BecameStaleError(${JSON.stringify(e.message)})`);
+            } catch (err) {
+                if (err instanceof _UpdateWasCancelled) {
+                    logCUp(this, `..._updateThread(${waveId}): ..._fn threw BecameStaleError(${JSON.stringify(err.message)})`);
                     logCUp(this, `..._updateThread(${waveId}): quitting`);
                     return;
                 } else {
-                    // TODO: how to recover from error in _fn?
-                    logCUp(this, `..._updateThread(${waveId}): ..._fn threw a real error; rethrowing and quitting: ${e.name}`);
-                    throw e;
+                    // _fn threw an error.
+                    logCUp(this, `..._updateThread(${waveId}): ..._fn threw a real error: ${err.name}`);
+                    logCUp(this, `..._updateThread(${waveId}): finishing wave with error`);
+                    this._finishWave(waveId, undefined, err);
+                    logCUp(this, `..._updateThread(${waveId}): done`);
                 }
             }
         }
     }
-    private _finishWave(waveId: number, v: T) {
-        logC2(this, `_finishWave(${waveId}, ${JSON.stringify(v)})`);
+    private _finishWave(waveId: number, val: T | undefined, err: Error | null) {
+        // either val is set and err is null, or val is undefined and err is set.
+
+        logC2(this, `_finishWave(${waveId}, ${JSON.stringify(val)}, ${err === null ? null : err.message})`);
         if (waveId !== this._currentWaveId) {
             logC2(this, `...finishWave(${waveId}): obsolete wave; quitting`);
             return;
         }
 
-        this._value = v;
+        this._value = val;
+        this._err = err;
         this._currentWaveId = null;
 
         // release waiting children
         logC2(this, `..._finishWave(${waveId}): releasing waiting children`);
-        for (let resolve of this._resolves) { resolve(this._value); }
-        this._resolves = [];
+        for (let {resolve, reject} of this._waiting) {
+            if (this._err !== null) {
+                reject(this._err);
+            } else {
+                resolve(this._value as T);
+            }
+        }
+        this._waiting = [];
 
-        // notify onChange subscribers
-        logC2(this, `..._finishWave(${waveId}): notifying onChange subscribers`);
-        for (let cb of this._onChangeCbs) { cb(this._value); }
+        // notify onChange and onError subscribers
+        if (this._err !== null) {
+            logC2(this, `..._finishWave(${waveId}): notifying onError subscribers`);
+            for (let cb of this._onErrorCbs) { cb(this._err); }
+        } else {
+            logC2(this, `..._finishWave(${waveId}): notifying onChange subscribers`);
+            for (let cb of this._onChangeCbs) { cb(this._value as T); }
+        }
 
         logC2(this, `..._finishWave(${waveId}): done`);
     }
