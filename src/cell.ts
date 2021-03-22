@@ -1,4 +1,4 @@
-import chalk = require('chalk');
+// import chalk = require('chalk');
 
 export let nop = (...args: any[]) => {};
 export let logMain =       nop;//(                 ...args: any[]) => console.log(chalk.black.bgWhite(     'main       '), ...args);
@@ -185,7 +185,7 @@ export class Cell<T> {
         this._children.clear();
 
         // anyone waiting on getWhenReady will get an error
-        for (let {resolve, reject} of this._waiting) {
+        for (let { resolve, reject } of this._waiting) {
             reject(new CellWasDestroyed(this.id));
         }
         this._waiting = [];
